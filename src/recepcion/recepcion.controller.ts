@@ -10,6 +10,11 @@ import { RecepcionService } from './recepcion.service';
 export class RecepcionController {
   constructor(private readonly recepcionService: RecepcionService) {}
 
+  @MessagePattern('core.datos.reiniciar')
+  reiniciar() {
+    return this.recepcionService.reiniciar();
+  }
+
   @MessagePattern('core.recepcion.listar')
   listar() {
     return this.recepcionService.listar();

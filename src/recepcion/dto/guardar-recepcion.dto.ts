@@ -13,6 +13,7 @@ import {
 
 export class ClienteInput {
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   id?: number;
 
@@ -39,6 +40,7 @@ export class ClienteInput {
 
 export class VehiculoInput {
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   id?: number;
 

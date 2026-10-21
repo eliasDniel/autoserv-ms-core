@@ -40,6 +40,19 @@ type Tx = Prisma.TransactionClient;
 export class RecepcionService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async reiniciar() {
+    await this.prisma.$executeRawUnsafe(`
+      TRUNCATE TABLE
+        app.clientes,
+        app.vehiculos,
+        app.ordenes_servicio,
+        app.servicios,
+        app.repuestos
+      RESTART IDENTITY CASCADE
+    `);
+    return { ok: true };
+  }
+
   async listar() {
     const ordenes = await this.prisma.ordenServicio.findMany({
       include: ordenInclude,
@@ -143,7 +156,30 @@ export class RecepcionService {
     if (porPlaca) {
       return tx.cliente.update({ where: { id: porPlaca.clienteId }, data });
     }
+    const porContacto = await this.buscarClientePorContacto(tx, data.telefono, data.email);
+    if (porContacto) {
+      return tx.cliente.update({ where: { id: porContacto.id }, data });
+    }
     return tx.cliente.create({ data });
+  }
+
+  private async buscarClientePorContacto(tx: Tx, telefono: string | null, email: string | null) {
+    const digitos = telefono?.replace(/\D/g, '') ?? '';
+    if (digitos) {
+      const conTelefono = await tx.cliente.findMany({
+        where: { telefono: { not: null } },
+        select: { id: true, telefono: true },
+      });
+      const hallado = conTelefono.find(
+        (item) => item.telefono?.replace(/\D/g, '') === digitos,
+      );
+      if (hallado) return hallado;
+    }
+    if (!email) return null;
+    return tx.cliente.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      select: { id: true },
+    });
   }
 
   private async upsertVehiculo(tx: Tx, dto: GuardarRecepcionDto, clienteId: number) {
