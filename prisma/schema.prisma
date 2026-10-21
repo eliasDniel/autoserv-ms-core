@@ -1,0 +1,169 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["app"]
+}
+
+enum EstadoOrden {
+  recepcion
+  en_taller
+  terminada
+
+  @@schema("app")
+}
+
+model Cliente {
+  id        Int       @id @default(autoincrement()) @map("id_cliente")
+  cedula    String?   @unique @db.VarChar(20)
+  nombre    String    @db.VarChar(150)
+  telefono  String?   @db.VarChar(30)
+  email     String?   @db.VarChar(255)
+  direccion String?   @db.VarChar(255)
+  ciudad    String?   @db.VarChar(100)
+  vehiculos Vehiculo[]
+
+  @@map("clientes")
+  @@schema("app")
+}
+
+model Vehiculo {
+  id           Int             @id @default(autoincrement()) @map("id_vehiculo")
+  clienteId    Int             @map("id_cliente")
+  cliente      Cliente         @relation(fields: [clienteId], references: [id])
+  placa        String          @unique @db.VarChar(20)
+  marca        String          @db.VarChar(50)
+  modelo       String          @db.VarChar(50)
+  anio         Int
+  color        String?         @db.VarChar(50)
+  vin          String?         @unique @db.VarChar(50)
+  motor        String?         @db.VarChar(50)
+  combustible  String?         @db.VarChar(30)
+  transmision  String?         @db.VarChar(30)
+  kilometraje  Int             @default(0)
+  ordenes      OrdenServicio[]
+
+  @@index([clienteId])
+  @@map("vehiculos")
+  @@schema("app")
+}
+
+model OrdenServicio {
+  id                    Int                     @id @default(autoincrement()) @map("id_orden_servicio")
+  numeroOs              String                  @unique @map("numero_os") @db.VarChar(30)
+  vehiculoId            Int                     @map("id_vehiculo")
+  vehiculo              Vehiculo                @relation(fields: [vehiculoId], references: [id])
+  idAsesor              Int                     @map("id_asesor")
+  nombreAsesor          String                  @map("nombre_asesor") @db.VarChar(150)
+  idTecnico             Int?                    @map("id_tecnico")
+  fechaIngreso          DateTime                @default(now()) @map("fecha_ingreso") @db.Timestamptz(6)
+  fechaFinalizacion     DateTime?               @map("fecha_finalizacion") @db.Timestamptz(6)
+  estado                EstadoOrden             @default(recepcion)
+  kilometrajeIngreso    Int                     @map("kilometraje_ingreso")
+  nivelCombustible      Int                     @map("nivel_combustible")
+  tieneLlaves           Boolean                 @map("tiene_llaves")
+  tieneAlarma           Boolean                 @map("tiene_alarma")
+  firmaDigital          String?                 @map("firma_digital") @db.Text
+  fechaFirma            DateTime?               @map("fecha_firma") @db.Timestamptz(6)
+  observacionesCliente  String?                 @map("observaciones_cliente") @db.Text
+  notasTecnico          String?                 @map("notas_tecnico") @db.Text
+  notasInspeccion       String?                 @map("notas_inspeccion") @db.Text
+  autorizacionFirmada   Boolean                 @default(false) @map("autorizacion_firmada")
+  garantiaVigente       Boolean                 @default(false) @map("garantia_vigente")
+  tipoGarantia          String?                 @map("tipo_garantia") @db.VarChar(50)
+  numeroGarantia        String?                 @map("numero_garantia") @db.VarChar(50)
+  inspecciones          InspeccionDanio[]
+  historial             HistorialEstadoOrden[]
+  servicios             OrdenServicioServicio[]
+  repuestos             DetalleRepuestoOrden[]
+
+  @@index([vehiculoId])
+  @@map("ordenes_servicio")
+  @@schema("app")
+}
+
+model InspeccionDanio {
+  id          Int           @id @default(autoincrement()) @map("id_inspeccion_danio")
+  ordenId     Int           @map("id_orden_servicio")
+  orden       OrdenServicio @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  zona        String        @db.VarChar(50)
+  tipoDanio   String        @default("visual") @map("tipo_danio") @db.VarChar(30)
+  severidad   String        @default("media") @db.VarChar(30)
+  descripcion String?       @db.Text
+
+  @@map("inspecciones_danio")
+  @@schema("app")
+}
+
+model HistorialEstadoOrden {
+  id             Int           @id @default(autoincrement()) @map("id_historial_estado")
+  ordenId        Int           @map("id_orden_servicio")
+  orden          OrdenServicio @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  idUsuario      Int           @map("id_usuario")
+  estadoAnterior String?       @map("estado_anterior") @db.VarChar(20)
+  estadoNuevo    String        @map("estado_nuevo") @db.VarChar(20)
+  fechaCambio    DateTime      @default(now()) @map("fecha_cambio") @db.Timestamptz(6)
+
+  @@map("historial_estado_orden")
+  @@schema("app")
+}
+
+model Servicio {
+  id                Int                     @id @default(autoincrement()) @map("id_servicio")
+  codigo            String                  @unique @db.VarChar(20)
+  nombre            String                  @db.VarChar(150)
+  tiempoEstimadoMin Int                     @map("tiempo_estimado_min")
+  precio            Decimal                 @db.Decimal(10, 2)
+  lineas            OrdenServicioServicio[]
+
+  @@map("servicios")
+  @@schema("app")
+}
+
+model OrdenServicioServicio {
+  id             Int           @id @default(autoincrement()) @map("id_orden_servicio_servicio")
+  ordenId        Int           @map("id_orden_servicio")
+  servicioId     Int           @map("id_servicio")
+  precioServicio Decimal       @map("precio_servicio") @db.Decimal(10, 2)
+  tiempoEtiqueta String        @map("tiempo_etiqueta") @db.VarChar(20)
+  orden          OrdenServicio @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  servicio       Servicio      @relation(fields: [servicioId], references: [id])
+
+  @@map("orden_servicio_servicio")
+  @@schema("app")
+}
+
+model Repuesto {
+  id             Int                   @id @default(autoincrement()) @map("id_repuesto")
+  codigo         String                @unique @db.VarChar(20)
+  nombre         String                @db.VarChar(150)
+  categoria      String                @default("General") @db.VarChar(50)
+  precioUnitario Decimal               @map("precio_unitario") @db.Decimal(10, 2)
+  stockActual    Int                   @default(0) @map("stock_actual")
+  stockMinimo    Int                   @default(0) @map("stock_minimo")
+  stockMaximo    Int                   @default(0) @map("stock_maximo")
+  lineas         DetalleRepuestoOrden[]
+
+  @@map("repuestos")
+  @@schema("app")
+}
+
+model DetalleRepuestoOrden {
+  id             Int           @id @default(autoincrement()) @map("id_detalle_repuesto_orden")
+  ordenId        Int           @map("id_orden_servicio")
+  repuestoId     Int           @map("id_repuesto")
+  idUsuario      Int?          @map("id_usuario")
+  cantidad       Int
+  precioUnitario Decimal       @map("precio_unitario") @db.Decimal(10, 2)
+  usado          Boolean       @default(false)
+  fechaRegistro  DateTime      @default(now()) @map("fecha_registro") @db.Timestamptz(6)
+  orden          OrdenServicio @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  repuesto       Repuesto      @relation(fields: [repuestoId], references: [id])
+
+  @@map("detalle_repuesto_orden")
+  @@schema("app")
+}
