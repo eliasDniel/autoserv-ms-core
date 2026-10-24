@@ -223,6 +223,7 @@ export class RecepcionService {
       garantiaVigente: dto.garantiaVigente,
       tipoGarantia: vacio(dto.tipoGarantia),
       numeroGarantia: vacio(dto.numeroGarantia),
+      ...(dto.diagnostico ? { diagnostico: leerDiagnostico(dto.diagnostico) } : {}),
     };
     const existente = dto.numeroOs
       ? await tx.ordenServicio.findUnique({ where: { numeroOs: dto.numeroOs } })
@@ -397,8 +398,24 @@ export class RecepcionService {
           used: linea.usado,
         })),
         signature: orden.firmaDigital ?? undefined,
+        diagnosis: orden.diagnostico ?? undefined,
       },
     };
+  }
+}
+
+function leerDiagnostico(valor: string): Prisma.InputJsonValue {
+  try {
+    const datos = JSON.parse(valor) as unknown;
+    if (!datos || typeof datos !== 'object' || Array.isArray(datos)) {
+      throw new Error('forma');
+    }
+    return datos as Prisma.InputJsonValue;
+  } catch {
+    throw new RpcException({
+      statusCode: 400,
+      message: 'El diagnóstico guardado no tiene un formato válido',
+    });
   }
 }
 

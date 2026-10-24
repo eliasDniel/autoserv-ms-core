@@ -72,6 +72,7 @@ model OrdenServicio {
   observacionesCliente  String?                 @map("observaciones_cliente") @db.Text
   notasTecnico          String?                 @map("notas_tecnico") @db.Text
   notasInspeccion       String?                 @map("notas_inspeccion") @db.Text
+  diagnostico           Json?                   @map("diagnostico")
   autorizacionFirmada   Boolean                 @default(false) @map("autorizacion_firmada")
   garantiaVigente       Boolean                 @default(false) @map("garantia_vigente")
   tipoGarantia          String?                 @map("tipo_garantia") @db.VarChar(50)
