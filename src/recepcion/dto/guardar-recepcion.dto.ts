@@ -210,4 +210,8 @@ export class CambiarEstadoDto {
 
   @IsInt()
   idUsuario: number;
+
+  @IsOptional()
+  @IsString()
+  pago?: string;
 }

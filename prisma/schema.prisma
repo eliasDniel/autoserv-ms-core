@@ -73,6 +73,7 @@ model OrdenServicio {
   notasTecnico          String?                 @map("notas_tecnico") @db.Text
   notasInspeccion       String?                 @map("notas_inspeccion") @db.Text
   diagnostico           Json?                   @map("diagnostico")
+  pago                  Json?                   @map("pago")
   autorizacionFirmada   Boolean                 @default(false) @map("autorizacion_firmada")
   garantiaVigente       Boolean                 @default(false) @map("garantia_vigente")
   tipoGarantia          String?                 @map("tipo_garantia") @db.VarChar(50)
@@ -148,8 +149,40 @@ model Repuesto {
   stockMinimo    Int                   @default(0) @map("stock_minimo")
   stockMaximo    Int                   @default(0) @map("stock_maximo")
   lineas         DetalleRepuestoOrden[]
+  movimientos    MovimientoInventario[]
 
   @@map("repuestos")
+  @@schema("app")
+}
+
+model MovimientoInventario {
+  id         Int      @id @default(autoincrement()) @map("id_movimiento")
+  repuestoId Int      @map("id_repuesto")
+  repuesto   Repuesto @relation(fields: [repuestoId], references: [id], onDelete: Cascade)
+  tipo       String   @db.VarChar(10)
+  cantidad   Int
+  nota       String?  @db.VarChar(255)
+  fecha      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([repuestoId, fecha])
+  @@map("movimientos_inventario")
+  @@schema("app")
+}
+
+model Cita {
+  id            Int    @id @default(autoincrement()) @map("id_cita")
+  nombreCliente String @map("nombre_cliente") @db.VarChar(150)
+  telefono      String @default("") @db.VarChar(30)
+  placa         String @default("") @db.VarChar(20)
+  servicio      String @db.VarChar(150)
+  fecha         String @db.VarChar(10)
+  hora          String @db.VarChar(5)
+  mecanico      String @db.VarChar(10)
+  notas         String @default("") @db.Text
+  estado        String @default("pendiente") @db.VarChar(20)
+
+  @@index([fecha])
+  @@map("citas")
   @@schema("app")
 }
 

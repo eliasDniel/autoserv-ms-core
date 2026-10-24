@@ -23,6 +23,21 @@ const ZONAS = [
   'Parachoques Tras.',
 ];
 
+const CATALOGO = [
+  { codigo: 'REP-001', nombre: 'Aceite Motor 5W-30 (1L)', categoria: 'Lubricantes', precio: 8.5, stock: 42, min: 20, max: 100, rotacion: 'Alta' },
+  { codigo: 'REP-002', nombre: 'Filtro de Aceite Chevrolet', categoria: 'Filtros', precio: 12, stock: 8, min: 10, max: 40, rotacion: 'Alta' },
+  { codigo: 'REP-003', nombre: 'Pastillas de Freno Delanteras', categoria: 'Frenos', precio: 45, stock: 3, min: 5, max: 20, rotacion: 'Media' },
+  { codigo: 'REP-004', nombre: 'Bujías NGK (juego)', categoria: 'Encendido', precio: 28, stock: 15, min: 8, max: 30, rotacion: 'Media' },
+  { codigo: 'REP-005', nombre: 'Refrigerante 50/50 (1L)', categoria: 'Lubricantes', precio: 6.5, stock: 2, min: 10, max: 30, rotacion: 'Alta' },
+  { codigo: 'REP-006', nombre: 'Correa de Distribución', categoria: 'Motor', precio: 85, stock: 4, min: 3, max: 10, rotacion: 'Baja' },
+  { codigo: 'REP-007', nombre: 'Amortiguador Delantero Der.', categoria: 'Suspensión', precio: 120, stock: 1, min: 2, max: 8, rotacion: 'Baja' },
+  { codigo: 'REP-008', nombre: 'Filtro de Aire', categoria: 'Filtros', precio: 18, stock: 18, min: 8, max: 35, rotacion: 'Alta' },
+  { codigo: 'REP-009', nombre: 'Aceite de Transmisión ATF', categoria: 'Lubricantes', precio: 15, stock: 12, min: 6, max: 24, rotacion: 'Media' },
+  { codigo: 'REP-010', nombre: 'Líquido de Frenos DOT 4', categoria: 'Frenos', precio: 9, stock: 7, min: 4, max: 16, rotacion: 'Media' },
+] as const;
+
+const ROTACION = Object.fromEntries(CATALOGO.map((item) => [item.codigo, item.rotacion]));
+
 const ordenInclude = {
   vehiculo: { include: { cliente: true } },
   inspecciones: true,
@@ -47,7 +62,8 @@ export class RecepcionService {
         app.vehiculos,
         app.ordenes_servicio,
         app.servicios,
-        app.repuestos
+        app.repuestos,
+        app.citas
       RESTART IDENTITY CASCADE
     `);
     return { ok: true };
@@ -74,6 +90,7 @@ export class RecepcionService {
     const guardada = await this.prisma.$transaction(async (tx) => {
       const cliente = await this.upsertCliente(tx, dto);
       const vehiculo = await this.upsertVehiculo(tx, dto, cliente.id);
+      await this.asegurarCatalogo(tx);
       const orden = await this.upsertOrden(tx, dto, vehiculo.id);
       await this.reemplazarInspeccion(tx, orden.id, dto);
       await this.reemplazarServicios(tx, orden.id, dto.servicios);
@@ -119,6 +136,7 @@ export class RecepcionService {
             estado: dto.estado as EstadoOrden,
             fechaFinalizacion:
               dto.estado === 'terminada' ? new Date() : orden.fechaFinalizacion,
+            ...(dto.pago ? { pago: leerJson(dto.pago) } : {}),
           },
         });
       }
@@ -129,6 +147,218 @@ export class RecepcionService {
     });
 
     return this.presentar(actualizada).orden;
+  }
+
+  async eliminar(numeroOs: string) {
+    const orden = await this.prisma.ordenServicio.findUnique({ where: { numeroOs } });
+    if (!orden) {
+      throw new RpcException({ statusCode: 404, message: 'La orden no existe' });
+    }
+    await this.prisma.ordenServicio.delete({ where: { id: orden.id } });
+    return { ok: true };
+  }
+
+  async listarInventario() {
+    await this.prisma.$transaction((tx) => this.asegurarCatalogo(tx));
+    const desde = new Date();
+    desde.setDate(desde.getDate() - 30);
+    const [repuestos, movimientos] = await Promise.all([
+      this.prisma.repuesto.findMany({ orderBy: { codigo: 'asc' } }),
+      this.prisma.movimientoInventario.findMany({
+        where: { fecha: { gte: desde } },
+        orderBy: { fecha: 'desc' },
+        include: { repuesto: { select: { codigo: true } } },
+      }),
+    ]);
+    const salidas = new Map<string, number>();
+    const recientes = new Map<string, { type: string; qty: number; date: string; note: string }[]>();
+    for (const movimiento of movimientos) {
+      const codigo = movimiento.repuesto.codigo;
+      if (movimiento.tipo === 'salida') {
+        salidas.set(codigo, (salidas.get(codigo) ?? 0) + movimiento.cantidad);
+      }
+      const lista = recientes.get(codigo) ?? [];
+      if (lista.length < 8) {
+        lista.push({
+          type: movimiento.tipo,
+          qty: movimiento.cantidad,
+          date: movimiento.fecha.toLocaleDateString('es-EC', { timeZone: 'America/Guayaquil' }),
+          note: movimiento.nota ?? '',
+        });
+        recientes.set(codigo, lista);
+      }
+    }
+    return repuestos.map((repuesto) => {
+      const demanda30 = salidas.get(repuesto.codigo) ?? 0;
+      const rotacion = demanda30 >= 8 ? 'Alta' : demanda30 >= 3 ? 'Media' : demanda30 > 0 ? 'Baja' : (ROTACION[repuesto.codigo] ?? 'Media');
+      return {
+        code: repuesto.codigo,
+        name: repuesto.nombre,
+        category: repuesto.categoria,
+        stock: repuesto.stockActual,
+        min: repuesto.stockMinimo,
+        max: repuesto.stockMaximo,
+        price: Number(repuesto.precioUnitario),
+        rotation: rotacion,
+        demanda30,
+        coberturaDias: demanda30 > 0 ? Math.round((repuesto.stockActual / demanda30) * 30) : null,
+        sugerido: Math.max(0, repuesto.stockMinimo + demanda30 - repuesto.stockActual),
+        movimientos: recientes.get(repuesto.codigo) ?? [],
+      };
+    });
+  }
+
+  async moverInventario(dto: { codigo: string; tipo: string; cantidad: number; nota?: string }) {
+    if (!['entrada', 'salida'].includes(dto.tipo) || !Number.isInteger(dto.cantidad) || dto.cantidad < 1) {
+      throw new RpcException({ statusCode: 400, message: 'El movimiento de stock no es válido' });
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const repuesto = await tx.repuesto.findUnique({ where: { codigo: dto.codigo } });
+      if (!repuesto) {
+        throw new RpcException({ statusCode: 404, message: 'El repuesto no existe' });
+      }
+      await this.aplicarStock(
+        tx,
+        repuesto.id,
+        dto.tipo === 'entrada' ? dto.cantidad : -dto.cantidad,
+        dto.nota?.trim() || (dto.tipo === 'entrada' ? 'Entrada manual' : 'Salida manual'),
+      );
+    });
+    return this.listarInventario();
+  }
+
+  async crearRepuesto(dto: {
+    nombre: string;
+    categoria?: string;
+    stock?: number;
+    min?: number;
+    max?: number;
+    precio?: number;
+  }) {
+    const nombre = dto.nombre?.trim();
+    if (!nombre) {
+      throw new RpcException({ statusCode: 400, message: 'Escribe el nombre del repuesto' });
+    }
+    const total = await this.prisma.repuesto.count();
+    const codigo = `REP-${String(total + 1).padStart(3, '0')}`;
+    const stock = Math.max(0, Number(dto.stock) || 0);
+    await this.prisma.repuesto.create({
+      data: {
+        codigo,
+        nombre,
+        categoria: dto.categoria?.trim() || 'General',
+        precioUnitario: Number(dto.precio) || 0,
+        stockActual: stock,
+        stockMinimo: Math.max(0, Number(dto.min) || 0),
+        stockMaximo: Math.max(0, Number(dto.max) || 0),
+      },
+    });
+    if (stock > 0) {
+      const creado = await this.prisma.repuesto.findUniqueOrThrow({ where: { codigo } });
+      await this.prisma.movimientoInventario.create({
+        data: { repuestoId: creado.id, tipo: 'entrada', cantidad: stock, nota: 'Stock inicial' },
+      });
+    }
+    return this.listarInventario();
+  }
+
+  async listarCitas() {
+    const citas = await this.prisma.cita.findMany({ orderBy: [{ fecha: 'asc' }, { hora: 'asc' }] });
+    return citas.map((cita) => this.presentarCita(cita));
+  }
+
+  async guardarCita(dto: {
+    id?: number;
+    nombreCliente: string;
+    telefono?: string;
+    placa?: string;
+    servicio: string;
+    fecha: string;
+    hora: string;
+    mecanico: string;
+    notas?: string;
+    estado?: string;
+  }) {
+    const nombre = dto.nombreCliente?.trim();
+    const servicio = dto.servicio?.trim();
+    if (!nombre || !servicio || !dto.fecha || !dto.hora || !dto.mecanico) {
+      throw new RpcException({ statusCode: 400, message: 'Completa el cliente, el servicio, la fecha y la hora' });
+    }
+    const estado = ['pendiente', 'confirmada', 'cancelada'].includes(dto.estado ?? '')
+      ? dto.estado!
+      : 'pendiente';
+    const data = {
+      nombreCliente: nombre,
+      telefono: dto.telefono?.trim() ?? '',
+      placa: dto.placa?.trim().toUpperCase() ?? '',
+      servicio,
+      fecha: dto.fecha,
+      hora: dto.hora,
+      mecanico: dto.mecanico,
+      notas: dto.notas?.trim() ?? '',
+      estado,
+    };
+    const cita = dto.id
+      ? await this.prisma.cita.update({ where: { id: dto.id }, data })
+      : await this.prisma.cita.create({ data });
+    return this.presentarCita(cita);
+  }
+
+  private presentarCita(cita: {
+    id: number;
+    nombreCliente: string;
+    telefono: string;
+    placa: string;
+    servicio: string;
+    fecha: string;
+    hora: string;
+    mecanico: string;
+    notas: string;
+    estado: string;
+  }) {
+    return {
+      id: String(cita.id),
+      clientName: cita.nombreCliente,
+      clientPhone: cita.telefono,
+      plate: cita.placa,
+      service: cita.servicio,
+      date: cita.fecha,
+      time: cita.hora,
+      mechanic: cita.mecanico,
+      notes: cita.notas,
+      status: cita.estado,
+    };
+  }
+
+  private async asegurarCatalogo(tx: Tx) {
+    for (const item of CATALOGO) {
+      const actual = await tx.repuesto.findUnique({ where: { codigo: item.codigo } });
+      if (!actual) {
+        await tx.repuesto.create({
+          data: {
+            codigo: item.codigo,
+            nombre: item.nombre,
+            categoria: item.categoria,
+            precioUnitario: item.precio,
+            stockActual: item.stock,
+            stockMinimo: item.min,
+            stockMaximo: item.max,
+          },
+        });
+        continue;
+      }
+      const movimientos = await tx.movimientoInventario.count({ where: { repuestoId: actual.id } });
+      if (actual.stockActual === 0 && movimientos === 0) {
+        await tx.repuesto.update({
+          where: { id: actual.id },
+          data: {
+            stockActual: item.stock,
+            stockMinimo: item.min,
+            stockMaximo: item.max,
+          },
+        });
+      }
+    }
   }
 
   private async upsertCliente(tx: Tx, dto: GuardarRecepcionDto) {
@@ -310,7 +540,17 @@ export class RecepcionService {
   }
 
   private async reemplazarRepuestos(tx: Tx, ordenId: number, dto: GuardarRecepcionDto) {
+    const previos = await tx.detalleRepuestoOrden.findMany({
+      where: { ordenId, usado: true },
+      select: { repuestoId: true, cantidad: true },
+    });
+    const usadoAntes = new Map<number, number>();
+    for (const linea of previos) {
+      usadoAntes.set(linea.repuestoId, (usadoAntes.get(linea.repuestoId) ?? 0) + linea.cantidad);
+    }
+
     await tx.detalleRepuestoOrden.deleteMany({ where: { ordenId } });
+    const usadoAhora = new Map<number, number>();
     for (const linea of dto.repuestos) {
       const repuesto = await tx.repuesto.upsert({
         where: { codigo: linea.codigo },
@@ -331,7 +571,40 @@ export class RecepcionService {
           usado: linea.usado,
         },
       });
+      if (linea.usado) {
+        usadoAhora.set(repuesto.id, (usadoAhora.get(repuesto.id) ?? 0) + linea.cantidad);
+      }
     }
+
+    const ids = new Set([...usadoAntes.keys(), ...usadoAhora.keys()]);
+    for (const id of ids) {
+      const delta = (usadoAhora.get(id) ?? 0) - (usadoAntes.get(id) ?? 0);
+      if (delta === 0) continue;
+      await this.aplicarStock(tx, id, -delta, delta > 0 ? 'Uso en orden' : 'Ajuste al desmarcar el uso');
+    }
+  }
+
+  private async aplicarStock(tx: Tx, repuestoId: number, delta: number, nota: string) {
+    const repuesto = await tx.repuesto.findUniqueOrThrow({ where: { id: repuestoId } });
+    const siguiente = repuesto.stockActual + delta;
+    if (siguiente < 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: `Stock insuficiente de ${repuesto.nombre}. Disponible: ${repuesto.stockActual}`,
+      });
+    }
+    await tx.repuesto.update({
+      where: { id: repuestoId },
+      data: { stockActual: siguiente },
+    });
+    await tx.movimientoInventario.create({
+      data: {
+        repuestoId,
+        tipo: delta >= 0 ? 'entrada' : 'salida',
+        cantidad: Math.abs(delta),
+        nota,
+      },
+    });
   }
 
   private presentar(orden: OrdenCompleta) {
@@ -399,9 +672,14 @@ export class RecepcionService {
         })),
         signature: orden.firmaDigital ?? undefined,
         diagnosis: orden.diagnostico ?? undefined,
+        payment: orden.pago ?? undefined,
       },
     };
   }
+}
+
+function leerJson(valor: string): Prisma.InputJsonValue {
+  return leerDiagnostico(valor);
 }
 
 function leerDiagnostico(valor: string): Prisma.InputJsonValue {
