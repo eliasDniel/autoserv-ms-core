@@ -160,8 +160,10 @@ export class RecepcionService {
 
   async listarInventario() {
     await this.prisma.$transaction((tx) => this.asegurarCatalogo(tx));
+    const diasVentana = 90;
     const desde = new Date();
-    desde.setDate(desde.getDate() - 30);
+    desde.setHours(0, 0, 0, 0);
+    desde.setDate(desde.getDate() - (diasVentana - 1));
     const [repuestos, movimientos] = await Promise.all([
       this.prisma.repuesto.findMany({ orderBy: { codigo: 'asc' } }),
       this.prisma.movimientoInventario.findMany({
@@ -170,27 +172,60 @@ export class RecepcionService {
         include: { repuesto: { select: { codigo: true } } },
       }),
     ]);
-    const salidas = new Map<string, number>();
-    const recientes = new Map<string, { type: string; qty: number; date: string; note: string }[]>();
+
+    const dias: string[] = [];
+    for (let i = 0; i < diasVentana; i++) {
+      const dia = new Date(desde);
+      dia.setDate(desde.getDate() + i);
+      dias.push(claveDia(dia));
+    }
+
+    const salidasPorDia = new Map<string, Map<string, number>>();
+    const salidas30 = new Map<string, number>();
+    const recientes = new Map<
+      string,
+      { type: string; qty: number; date: string; note: string }[]
+    >();
+    const hace30 = new Date();
+    hace30.setDate(hace30.getDate() - 30);
+
     for (const movimiento of movimientos) {
       const codigo = movimiento.repuesto.codigo;
       if (movimiento.tipo === 'salida') {
-        salidas.set(codigo, (salidas.get(codigo) ?? 0) + movimiento.cantidad);
+        const clave = claveDia(movimiento.fecha);
+        const porDia = salidasPorDia.get(codigo) ?? new Map<string, number>();
+        porDia.set(clave, (porDia.get(clave) ?? 0) + movimiento.cantidad);
+        salidasPorDia.set(codigo, porDia);
+        if (movimiento.fecha >= hace30) {
+          salidas30.set(codigo, (salidas30.get(codigo) ?? 0) + movimiento.cantidad);
+        }
       }
       const lista = recientes.get(codigo) ?? [];
       if (lista.length < 8) {
         lista.push({
           type: movimiento.tipo,
           qty: movimiento.cantidad,
-          date: movimiento.fecha.toLocaleDateString('es-EC', { timeZone: 'America/Guayaquil' }),
+          date: movimiento.fecha.toLocaleDateString('es-EC', {
+            timeZone: 'America/Guayaquil',
+          }),
           note: movimiento.nota ?? '',
         });
         recientes.set(codigo, lista);
       }
     }
+
     return repuestos.map((repuesto) => {
-      const demanda30 = salidas.get(repuesto.codigo) ?? 0;
-      const rotacion = demanda30 >= 8 ? 'Alta' : demanda30 >= 3 ? 'Media' : demanda30 > 0 ? 'Baja' : (ROTACION[repuesto.codigo] ?? 'Media');
+      const porDia = salidasPorDia.get(repuesto.codigo) ?? new Map<string, number>();
+      const serieDiaria = dias.map((dia) => porDia.get(dia) ?? 0);
+      const demanda30 = salidas30.get(repuesto.codigo) ?? 0;
+      const rotacion =
+        demanda30 >= 8
+          ? 'Alta'
+          : demanda30 >= 3
+            ? 'Media'
+            : demanda30 > 0
+              ? 'Baja'
+              : (ROTACION[repuesto.codigo] ?? 'Media');
       return {
         code: repuesto.codigo,
         name: repuesto.nombre,
@@ -201,8 +236,16 @@ export class RecepcionService {
         price: Number(repuesto.precioUnitario),
         rotation: rotacion,
         demanda30,
-        coberturaDias: demanda30 > 0 ? Math.round((repuesto.stockActual / demanda30) * 30) : null,
-        sugerido: Math.max(0, repuesto.stockMinimo + demanda30 - repuesto.stockActual),
+        coberturaDias:
+          demanda30 > 0
+            ? Math.round((repuesto.stockActual / demanda30) * 30)
+            : null,
+        sugerido: Math.max(
+          0,
+          repuesto.stockMinimo + demanda30 - repuesto.stockActual,
+        ),
+        fuente: 'local' as const,
+        serieDiaria,
         movimientos: recientes.get(repuesto.codigo) ?? [],
       };
     });
@@ -706,4 +749,8 @@ function minutos(tiempo: string) {
   const horas = Number.parseFloat(tiempo);
   if (Number.isNaN(horas)) return 60;
   return Math.round(horas * 60);
+}
+
+function claveDia(fecha: Date) {
+  return fecha.toLocaleDateString('en-CA', { timeZone: 'America/Guayaquil' });
 }
