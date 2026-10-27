@@ -17,4 +17,4 @@ RUN dos2unix /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/dock
 RUN --mount=type=cache,target=/root/.cache/prisma npx prisma generate
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["npm", "run", "start:dev"]
+CMD ["sh", "-c", "rm -f tsconfig.build.tsbuildinfo && npm run start:dev"]
