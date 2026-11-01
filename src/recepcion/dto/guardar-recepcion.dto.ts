@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   MinLength,
   ValidateNested,
@@ -151,6 +152,11 @@ export class GuardarRecepcionDto {
   @IsBoolean()
   tieneAlarma: boolean;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  claveVehiculo?: string;
+
   @IsBoolean()
   autorizacionFirmada: boolean;
 
@@ -176,10 +182,6 @@ export class GuardarRecepcionDto {
   @IsOptional()
   @IsString()
   notasInspeccion?: string;
-
-  @IsOptional()
-  @IsString()
-  firmaDigital?: string;
 
   @IsOptional()
   @IsString()

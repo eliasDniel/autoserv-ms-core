@@ -479,7 +479,6 @@ export class RecepcionService {
   }
 
   private async upsertOrden(tx: Tx, dto: GuardarRecepcionDto, vehiculoId: number) {
-    const firma = vacio(dto.firmaDigital);
     const data = {
       vehiculoId,
       nombreAsesor: dto.nombreAsesor,
@@ -487,12 +486,11 @@ export class RecepcionService {
       nivelCombustible: dto.nivelCombustible,
       tieneLlaves: dto.tieneLlaves,
       tieneAlarma: dto.tieneAlarma,
-      firmaDigital: firma,
-      fechaFirma: firma ? new Date() : null,
+      claveVehiculo: vacio(dto.claveVehiculo),
       observacionesCliente: vacio(dto.observacionesCliente),
       notasTecnico: vacio(dto.notasTecnico),
       notasInspeccion: vacio(dto.notasInspeccion),
-      autorizacionFirmada: dto.autorizacionFirmada || Boolean(firma),
+      autorizacionFirmada: dto.autorizacionFirmada,
       garantiaVigente: dto.garantiaVigente,
       tipoGarantia: vacio(dto.tipoGarantia),
       numeroGarantia: vacio(dto.numeroGarantia),
@@ -692,6 +690,7 @@ export class RecepcionService {
         fuelLevel: orden.nivelCombustible,
         hasKey: orden.tieneLlaves,
         hasAlarm: orden.tieneAlarma,
+        vehicleKey: orden.claveVehiculo ?? '',
         authSigned: orden.autorizacionFirmada,
         warranty: orden.garantiaVigente,
         warrantyType: orden.tipoGarantia ?? '',
@@ -713,7 +712,6 @@ export class RecepcionService {
           price: Number(linea.precioUnitario),
           used: linea.usado,
         })),
-        signature: orden.firmaDigital ?? undefined,
         diagnosis: orden.diagnostico ?? undefined,
         payment: orden.pago ?? undefined,
       },

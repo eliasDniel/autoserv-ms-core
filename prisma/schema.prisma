@@ -67,8 +67,7 @@ model OrdenServicio {
   nivelCombustible      Int                     @map("nivel_combustible")
   tieneLlaves           Boolean                 @map("tiene_llaves")
   tieneAlarma           Boolean                 @map("tiene_alarma")
-  firmaDigital          String?                 @map("firma_digital") @db.Text
-  fechaFirma            DateTime?               @map("fecha_firma") @db.Timestamptz(6)
+  claveVehiculo         String?                 @map("clave_vehiculo") @db.VarChar(50)
   observacionesCliente  String?                 @map("observaciones_cliente") @db.Text
   notasTecnico          String?                 @map("notas_tecnico") @db.Text
   notasInspeccion       String?                 @map("notas_inspeccion") @db.Text
