@@ -271,6 +271,7 @@ export class RecepcionService {
   }
 
   async crearRepuesto(dto: {
+    codigo?: string;
     nombre: string;
     categoria?: string;
     stock?: number;
@@ -283,17 +284,36 @@ export class RecepcionService {
       throw new RpcException({ statusCode: 400, message: 'Escribe el nombre del repuesto' });
     }
     const total = await this.prisma.repuesto.count();
-    const codigo = `REP-${String(total + 1).padStart(3, '0')}`;
+    const codigo = (dto.codigo?.trim() || `REP-${String(total + 1).padStart(3, '0')}`).toUpperCase();
     const stock = Math.max(0, Number(dto.stock) || 0);
+    const min = Math.max(0, Number(dto.min) || 0);
+    const max = Math.max(0, Number(dto.max) || 0);
+    const precio = Number(dto.precio) || 0;
+    const categoria = dto.categoria?.trim() || 'General';
+    const existente = await this.prisma.repuesto.findUnique({ where: { codigo } });
+    if (existente) {
+      await this.prisma.repuesto.update({
+        where: { id: existente.id },
+        data: {
+          nombre,
+          categoria,
+          precioUnitario: precio,
+          stockMinimo: min,
+          stockMaximo: max,
+          stockActual: stock,
+        },
+      });
+      return this.listarInventario();
+    }
     await this.prisma.repuesto.create({
       data: {
         codigo,
         nombre,
-        categoria: dto.categoria?.trim() || 'General',
-        precioUnitario: Number(dto.precio) || 0,
+        categoria,
+        precioUnitario: precio,
         stockActual: stock,
-        stockMinimo: Math.max(0, Number(dto.min) || 0),
-        stockMaximo: Math.max(0, Number(dto.max) || 0),
+        stockMinimo: min,
+        stockMaximo: max,
       },
     });
     if (stock > 0) {
@@ -301,6 +321,21 @@ export class RecepcionService {
       await this.prisma.movimientoInventario.create({
         data: { repuestoId: creado.id, tipo: 'entrada', cantidad: stock, nota: 'Stock inicial' },
       });
+    }
+    return this.listarInventario();
+  }
+
+  async importarRepuestos(filas: {
+    codigo: string;
+    nombre: string;
+    categoria?: string;
+    stock?: number;
+    min?: number;
+    max?: number;
+    precio?: number;
+  }[]) {
+    for (const fila of filas) {
+      await this.crearRepuesto(fila);
     }
     return this.listarInventario();
   }
@@ -548,6 +583,114 @@ export class RecepcionService {
     });
   }
 
+  async listarServicios() {
+    const filas = await this.prisma.servicio.findMany({ orderBy: { codigo: 'asc' } });
+    if (filas.length === 0) {
+      await this.sembrarServiciosBase();
+      const sembrados = await this.prisma.servicio.findMany({ orderBy: { codigo: 'asc' } });
+      return sembrados.map(mapServicio);
+    }
+    return filas.map(mapServicio);
+  }
+
+  async guardarServicio(dto: {
+    codigo?: string;
+    nombre: string;
+    tiempo: string;
+    precio: number;
+  }) {
+    const nombre = dto.nombre?.trim();
+    const tiempo = dto.tiempo?.trim() || '1h';
+    if (!nombre) {
+      throw new RpcException({ statusCode: 400, message: 'El nombre del servicio es obligatorio' });
+    }
+    const codigo = (dto.codigo?.trim() || (await this.siguienteCodigoServicio())).toUpperCase();
+    const fila = await this.prisma.servicio.upsert({
+      where: { codigo },
+      update: {
+        nombre,
+        precio: dto.precio,
+        tiempoEstimadoMin: minutos(tiempo),
+      },
+      create: {
+        codigo,
+        nombre,
+        precio: dto.precio,
+        tiempoEstimadoMin: minutos(tiempo),
+      },
+    });
+    return mapServicio(fila);
+  }
+
+  async eliminarServicio(codigo: string) {
+    const fila = await this.prisma.servicio.findUnique({ where: { codigo } });
+    if (!fila) {
+      throw new RpcException({ statusCode: 404, message: 'Servicio no encontrado' });
+    }
+    const enUso = await this.prisma.ordenServicioServicio.count({
+      where: { servicioId: fila.id },
+    });
+    if (enUso > 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede eliminar: el servicio está usado en órdenes',
+      });
+    }
+    await this.prisma.servicio.delete({ where: { id: fila.id } });
+    return { ok: true };
+  }
+
+  async importarServicios(filas: { codigo: string; nombre: string; tiempo: string; precio: number }[]) {
+    const guardados: { code: string; name: string; time: string; price: number }[] = [];
+    for (const fila of filas) {
+      guardados.push(
+        await this.guardarServicio({
+          codigo: fila.codigo,
+          nombre: fila.nombre,
+          tiempo: fila.tiempo,
+          precio: fila.precio,
+        }),
+      );
+    }
+    return guardados;
+  }
+
+  private async sembrarServiciosBase() {
+    const base = [
+      { codigo: 'SRV-001', nombre: 'Cambio de aceite y filtro', tiempo: '1h', precio: 45 },
+      { codigo: 'SRV-002', nombre: 'Revisión de suspensión delantera', tiempo: '2h', precio: 80 },
+      { codigo: 'SRV-003', nombre: 'Revisión sistema A/C', tiempo: '1.5h', precio: 60 },
+      { codigo: 'SRV-004', nombre: 'Revisión y calibración de llantas', tiempo: '0.5h', precio: 20 },
+      { codigo: 'SRV-005', nombre: 'Cambio de pastillas de freno', tiempo: '1.5h', precio: 150 },
+      { codigo: 'SRV-006', nombre: 'Revisión general del vehículo', tiempo: '1h', precio: 80 },
+      { codigo: 'SRV-007', nombre: 'Alineación y balanceo', tiempo: '1h', precio: 40 },
+      { codigo: 'SRV-008', nombre: 'Diagnóstico computarizado', tiempo: '0.5h', precio: 35 },
+      { codigo: 'SRV-016', nombre: 'Cambio de filtro de combustible / gasolina', tiempo: '0.75h', precio: 35 },
+    ];
+    for (const item of base) {
+      await this.prisma.servicio.upsert({
+        where: { codigo: item.codigo },
+        update: {},
+        create: {
+          codigo: item.codigo,
+          nombre: item.nombre,
+          precio: item.precio,
+          tiempoEstimadoMin: minutos(item.tiempo),
+        },
+      });
+    }
+  }
+
+  private async siguienteCodigoServicio() {
+    const filas = await this.prisma.servicio.findMany({ select: { codigo: true } });
+    let max = 0;
+    for (const fila of filas) {
+      const match = /^SRV-(\d+)$/i.exec(fila.codigo);
+      if (match) max = Math.max(max, Number(match[1]));
+    }
+    return `SRV-${String(max + 1).padStart(3, '0')}`;
+  }
+
   private async reemplazarServicios(
     tx: Tx,
     ordenId: number,
@@ -747,6 +890,30 @@ function minutos(tiempo: string) {
   const horas = Number.parseFloat(tiempo);
   if (Number.isNaN(horas)) return 60;
   return Math.round(horas * 60);
+}
+
+function etiquetaTiempo(minutosEstimados: number) {
+  if (minutosEstimados % 60 === 0) return `${minutosEstimados / 60}h`;
+  const horas = minutosEstimados / 60;
+  return `${Number(horas.toFixed(2))}h`.replace(/\.?0+h$/, 'h').replace(/(\.\d*?)0+h$/, '$1h');
+}
+
+function mapServicio(fila: {
+  codigo: string;
+  nombre: string;
+  tiempoEstimadoMin: number;
+  precio: { toNumber?: () => number } | number | string;
+}) {
+  const precio =
+    typeof fila.precio === 'object' && fila.precio && 'toNumber' in fila.precio
+      ? fila.precio.toNumber!()
+      : Number(fila.precio);
+  return {
+    code: fila.codigo,
+    name: fila.nombre,
+    time: etiquetaTiempo(fila.tiempoEstimadoMin),
+    price: precio,
+  };
 }
 
 function claveDia(fecha: Date) {

@@ -46,8 +46,31 @@ export class RecepcionController {
   }
 
   @MessagePattern('core.inventario.crear')
-  crearRepuesto(@Payload() dto: { nombre: string; categoria?: string; stock?: number; min?: number; max?: number; precio?: number }) {
+  crearRepuesto(@Payload() dto: {
+    codigo?: string;
+    nombre: string;
+    categoria?: string;
+    stock?: number;
+    min?: number;
+    max?: number;
+    precio?: number;
+  }) {
     return this.recepcionService.crearRepuesto(dto);
+  }
+
+  @MessagePattern('core.inventario.importar')
+  importarRepuestos(@Payload() dto: {
+    filas: {
+      codigo: string;
+      nombre: string;
+      categoria?: string;
+      stock?: number;
+      min?: number;
+      max?: number;
+      precio?: number;
+    }[];
+  }) {
+    return this.recepcionService.importarRepuestos(dto.filas ?? []);
   }
 
   @MessagePattern('core.cita.listar')
@@ -69,5 +92,32 @@ export class RecepcionController {
     estado?: string;
   }) {
     return this.recepcionService.guardarCita(dto);
+  }
+
+  @MessagePattern('core.servicios.listar')
+  listarServicios() {
+    return this.recepcionService.listarServicios();
+  }
+
+  @MessagePattern('core.servicios.guardar')
+  guardarServicio(@Payload() dto: {
+    codigo?: string;
+    nombre: string;
+    tiempo: string;
+    precio: number;
+  }) {
+    return this.recepcionService.guardarServicio(dto);
+  }
+
+  @MessagePattern('core.servicios.eliminar')
+  eliminarServicio(@Payload() dto: { codigo: string }) {
+    return this.recepcionService.eliminarServicio(dto.codigo);
+  }
+
+  @MessagePattern('core.servicios.importar')
+  importarServicios(@Payload() dto: {
+    filas: { codigo: string; nombre: string; tiempo: string; precio: number }[];
+  }) {
+    return this.recepcionService.importarServicios(dto.filas ?? []);
   }
 }
