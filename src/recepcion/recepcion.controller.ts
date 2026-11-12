@@ -78,6 +78,11 @@ export class RecepcionController {
     return this.recepcionService.listarCitas();
   }
 
+  @MessagePattern('core.cita.horasLibres')
+  horasLibres(@Payload() dto: { fecha: string; servicioId?: number }) {
+    return this.recepcionService.horasLibres(dto);
+  }
+
   @MessagePattern('core.cita.guardar')
   guardarCita(@Payload() dto: {
     id?: number;
@@ -90,8 +95,59 @@ export class RecepcionController {
     mecanico: string;
     notas?: string;
     estado?: string;
+    origen?: string;
+    telegramChatId?: string;
+    clienteId?: number;
+    vehiculoId?: number;
+    servicioId?: number;
   }) {
     return this.recepcionService.guardarCita(dto);
+  }
+
+  @MessagePattern('core.cliente.vincularTelegram')
+  vincularTelegram(@Payload() dto: {
+    token?: string;
+    telefono?: string;
+    cedula?: string;
+    chatId: string;
+    nombre?: string;
+  }) {
+    return this.recepcionService.vincularTelegram(dto);
+  }
+
+  @MessagePattern('core.cliente.crearVinculoTelegram')
+  crearVinculoTelegram(@Payload() dto: { clienteId: number }) {
+    return this.recepcionService.crearVinculoTelegram(dto);
+  }
+
+  @MessagePattern('core.cliente.porChat')
+  clientePorChat(@Payload() dto: { chatId: string }) {
+    return this.recepcionService.clientePorChat(dto);
+  }
+
+  @MessagePattern('core.cita.porChat')
+  citasPorChat(@Payload() dto: { chatId: string }) {
+    return this.recepcionService.citasPorChat(dto);
+  }
+
+  @MessagePattern('core.cita.cancelarTelegram')
+  cancelarCitaTelegram(@Payload() dto: { id: number; chatId: string }) {
+    return this.recepcionService.cancelarCitaTelegram(dto);
+  }
+
+  @MessagePattern('core.cita.confirmarTelegram')
+  confirmarCitaTelegram(@Payload() dto: { id: number; chatId: string }) {
+    return this.recepcionService.confirmarCitaTelegram(dto);
+  }
+
+  @MessagePattern('core.cita.recordatorios')
+  citasParaRecordatorio(@Payload() dto: { ventana: '24h' | '2h' }) {
+    return this.recepcionService.citasParaRecordatorio(dto);
+  }
+
+  @MessagePattern('core.cita.marcarRecordatorio')
+  marcarRecordatorio(@Payload() dto: { id: number; ventana: '24h' | '2h' }) {
+    return this.recepcionService.marcarRecordatorio(dto);
   }
 
   @MessagePattern('core.servicios.listar')

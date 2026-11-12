@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { EstadoOrden, Prisma } from '../../generated/prisma/client';
@@ -63,9 +64,11 @@ export class RecepcionService {
         app.ordenes_servicio,
         app.servicios,
         app.repuestos,
-        app.citas
+        app.citas,
+        app.horarios_taller
       RESTART IDENTITY CASCADE
     `);
+    await this.asegurarHorariosTaller();
     return { ok: true };
   }
 
@@ -341,8 +344,36 @@ export class RecepcionService {
   }
 
   async listarCitas() {
+    await this.asegurarHorariosTaller();
     const citas = await this.prisma.cita.findMany({ orderBy: [{ fecha: 'asc' }, { hora: 'asc' }] });
     return citas.map((cita) => this.presentarCita(cita));
+  }
+
+  async horasLibres(dto: { fecha: string; servicioId?: number }) {
+    await this.asegurarHorariosTaller();
+    const fecha = dto.fecha?.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha ?? '')) {
+      throw new RpcException({ statusCode: 400, message: 'Fecha inválida (YYYY-MM-DD)' });
+    }
+    const dia = diaSemanaGuayaquil(fecha!);
+    const horario = await this.prisma.horarioTaller.findUnique({ where: { diaSemana: dia } });
+    if (!horario) {
+      return { fecha, horas: [] as string[] };
+    }
+    const slots = generarSlots(horario.horaInicio, horario.horaFin, horario.intervaloMin);
+    const ocupadas = await this.prisma.cita.findMany({
+      where: {
+        fecha: fecha!,
+        estado: { not: 'cancelada' },
+      },
+      select: { hora: true },
+    });
+    const tomadas = new Set(ocupadas.map((c) => c.hora));
+    return {
+      fecha,
+      horas: slots.filter((h) => !tomadas.has(h)),
+      intervaloMin: horario.intervaloMin,
+    };
   }
 
   async guardarCita(dto: {
@@ -356,6 +387,11 @@ export class RecepcionService {
     mecanico: string;
     notas?: string;
     estado?: string;
+    origen?: string;
+    telegramChatId?: string;
+    clienteId?: number;
+    vehiculoId?: number;
+    servicioId?: number;
   }) {
     const nombre = dto.nombreCliente?.trim();
     const servicio = dto.servicio?.trim();
@@ -365,6 +401,7 @@ export class RecepcionService {
     const estado = ['pendiente', 'confirmada', 'cancelada'].includes(dto.estado ?? '')
       ? dto.estado!
       : 'pendiente';
+    const origen = dto.origen === 'telegram' ? 'telegram' : 'web';
     const data = {
       nombreCliente: nombre,
       telefono: dto.telefono?.trim() ?? '',
@@ -375,11 +412,232 @@ export class RecepcionService {
       mecanico: dto.mecanico,
       notas: dto.notas?.trim() ?? '',
       estado,
+      origen,
+      telegramChatId: vacio(dto.telegramChatId),
+      clienteId: dto.clienteId ?? null,
+      vehiculoId: dto.vehiculoId ?? null,
+      servicioId: dto.servicioId ?? null,
     };
+
+    if (!dto.id) {
+      const choque = await this.prisma.cita.findFirst({
+        where: {
+          fecha: data.fecha,
+          hora: data.hora,
+          mecanico: data.mecanico,
+          estado: { not: 'cancelada' },
+        },
+      });
+      if (choque) {
+        throw new RpcException({
+          statusCode: 409,
+          message: 'Ese horario ya fue tomado, intenta otro',
+        });
+      }
+    }
+
     const cita = dto.id
       ? await this.prisma.cita.update({ where: { id: dto.id }, data })
       : await this.prisma.cita.create({ data });
     return this.presentarCita(cita);
+  }
+
+  async vincularTelegram(dto: {
+    token?: string;
+    telefono?: string;
+    cedula?: string;
+    chatId: string;
+    nombre?: string;
+  }) {
+    const chatId = String(dto.chatId ?? '').trim();
+    if (!chatId) {
+      throw new RpcException({ statusCode: 400, message: 'chatId requerido' });
+    }
+
+    let cliente = null as Awaited<ReturnType<typeof this.prisma.cliente.findFirst>>;
+
+    if (dto.token?.trim()) {
+      cliente = await this.prisma.cliente.findFirst({
+        where: {
+          telegramVinculoToken: dto.token.trim(),
+          telegramVinculoExpira: { gt: new Date() },
+        },
+      });
+      if (!cliente) {
+        throw new RpcException({ statusCode: 400, message: 'El enlace de vinculación no es válido o expiró' });
+      }
+    } else {
+      const telefono = dto.telefono?.trim();
+      const cedula = dto.cedula?.trim();
+      if (!telefono && !cedula) {
+        throw new RpcException({ statusCode: 400, message: 'Indica teléfono o cédula para vincular' });
+      }
+      cliente = await this.prisma.cliente.findFirst({
+        where: {
+          OR: [
+            ...(telefono ? [{ telefono }] : []),
+            ...(cedula ? [{ cedula }] : []),
+          ],
+        },
+      });
+      if (!cliente) {
+        cliente = await this.prisma.cliente.create({
+          data: {
+            nombre: dto.nombre?.trim() || 'Cliente Telegram',
+            telefono: telefono || null,
+            cedula: cedula || null,
+          },
+        });
+      }
+    }
+
+    const actualizado = await this.prisma.cliente.update({
+      where: { id: cliente.id },
+      data: {
+        telegramChatId: chatId,
+        telegramVinculoToken: null,
+        telegramVinculoExpira: null,
+      },
+      include: { vehiculos: true },
+    });
+    return this.presentarClienteTelegram(actualizado);
+  }
+
+  async crearVinculoTelegram(dto: { clienteId: number }) {
+    const cliente = await this.prisma.cliente.findUnique({ where: { id: dto.clienteId } });
+    if (!cliente) {
+      throw new RpcException({ statusCode: 404, message: 'Cliente no encontrado' });
+    }
+    const token = randomToken();
+    const expira = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await this.prisma.cliente.update({
+      where: { id: cliente.id },
+      data: {
+        telegramVinculoToken: token,
+        telegramVinculoExpira: expira,
+      },
+    });
+    return { token, expira: expira.toISOString(), clienteId: cliente.id };
+  }
+
+  async clientePorChat(dto: { chatId: string }) {
+    const chatId = String(dto.chatId ?? '').trim();
+    const cliente = await this.prisma.cliente.findFirst({
+      where: { telegramChatId: chatId },
+      include: { vehiculos: true },
+    });
+    if (!cliente) {
+      return null;
+    }
+    return this.presentarClienteTelegram(cliente);
+  }
+
+  async citasPorChat(dto: { chatId: string }) {
+    const chatId = String(dto.chatId ?? '').trim();
+    const citas = await this.prisma.cita.findMany({
+      where: {
+        telegramChatId: chatId,
+        estado: { not: 'cancelada' },
+      },
+      orderBy: [{ fecha: 'asc' }, { hora: 'asc' }],
+    });
+    return citas.map((cita) => this.presentarCita(cita));
+  }
+
+  async cancelarCitaTelegram(dto: { id: number; chatId: string }) {
+    const cita = await this.prisma.cita.findUnique({ where: { id: dto.id } });
+    if (!cita || cita.telegramChatId !== String(dto.chatId)) {
+      throw new RpcException({ statusCode: 404, message: 'Cita no encontrada' });
+    }
+    const actualizada = await this.prisma.cita.update({
+      where: { id: cita.id },
+      data: { estado: 'cancelada' },
+    });
+    return this.presentarCita(actualizada);
+  }
+
+  async confirmarCitaTelegram(dto: { id: number; chatId: string }) {
+    const cita = await this.prisma.cita.findUnique({ where: { id: dto.id } });
+    if (!cita || cita.telegramChatId !== String(dto.chatId)) {
+      throw new RpcException({ statusCode: 404, message: 'Cita no encontrada' });
+    }
+    const actualizada = await this.prisma.cita.update({
+      where: { id: cita.id },
+      data: { estado: 'confirmada' },
+    });
+    return this.presentarCita(actualizada);
+  }
+
+  async citasParaRecordatorio(dto: { ventana: '24h' | '2h' }) {
+    const ahora = ahoraGuayaquil();
+    const citas = await this.prisma.cita.findMany({
+      where: {
+        estado: { in: ['pendiente', 'confirmada'] },
+        telegramChatId: { not: null },
+        ...(dto.ventana === '24h'
+          ? { recordatorio24hEnviado: false }
+          : { recordatorio2hEnviado: false }),
+      },
+    });
+    const candidatas = citas.filter((cita) => {
+      const inicio = Date.parse(`${cita.fecha}T${cita.hora}:00-05:00`);
+      if (Number.isNaN(inicio)) return false;
+      const diffH = (inicio - ahora.getTime()) / 36e5;
+      if (dto.ventana === '24h') return diffH > 20 && diffH <= 24.5;
+      return diffH > 1.5 && diffH <= 2.5;
+    });
+    return candidatas.map((cita) => this.presentarCita(cita));
+  }
+
+  async marcarRecordatorio(dto: { id: number; ventana: '24h' | '2h' }) {
+    await this.prisma.cita.update({
+      where: { id: dto.id },
+      data:
+        dto.ventana === '24h'
+          ? { recordatorio24hEnviado: true }
+          : { recordatorio2hEnviado: true },
+    });
+    return { ok: true };
+  }
+
+  private async asegurarHorariosTaller() {
+    const total = await this.prisma.horarioTaller.count();
+    if (total > 0) return;
+    const dias = [1, 2, 3, 4, 5, 6]; // Lun-Sáb
+    for (const dia of dias) {
+      await this.prisma.horarioTaller.create({
+        data: {
+          diaSemana: dia,
+          horaInicio: '08:00',
+          horaFin: '17:00',
+          intervaloMin: 60,
+        },
+      });
+    }
+  }
+
+  private presentarClienteTelegram(cliente: {
+    id: number;
+    nombre: string;
+    telefono: string | null;
+    cedula: string | null;
+    telegramChatId: string | null;
+    vehiculos: { id: number; placa: string; marca: string; modelo: string }[];
+  }) {
+    return {
+      id: cliente.id,
+      nombre: cliente.nombre,
+      telefono: cliente.telefono ?? '',
+      cedula: cliente.cedula ?? '',
+      telegramChatId: cliente.telegramChatId,
+      vehiculos: cliente.vehiculos.map((v) => ({
+        id: v.id,
+        placa: v.placa,
+        marca: v.marca,
+        modelo: v.modelo,
+        label: `${v.placa} · ${v.marca} ${v.modelo}`,
+      })),
+    };
   }
 
   private presentarCita(cita: {
@@ -393,6 +651,8 @@ export class RecepcionService {
     mecanico: string;
     notas: string;
     estado: string;
+    origen?: string;
+    telegramChatId?: string | null;
   }) {
     return {
       id: String(cita.id),
@@ -405,6 +665,8 @@ export class RecepcionService {
       mechanic: cita.mecanico,
       notes: cita.notas,
       status: cita.estado,
+      origen: cita.origen ?? 'web',
+      telegramChatId: cita.telegramChatId ?? undefined,
     };
   }
 
@@ -918,4 +1180,34 @@ function mapServicio(fila: {
 
 function claveDia(fecha: Date) {
   return fecha.toLocaleDateString('en-CA', { timeZone: 'America/Guayaquil' });
+}
+
+function randomToken() {
+  return randomBytes(16).toString('hex');
+}
+
+function ahoraGuayaquil() {
+  return new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'America/Guayaquil' }),
+  );
+}
+
+/** 0=domingo … 6=sábado en America/Guayaquil */
+function diaSemanaGuayaquil(fechaIso: string) {
+  const d = new Date(`${fechaIso}T12:00:00-05:00`);
+  return d.getUTCDay();
+}
+
+function generarSlots(horaInicio: string, horaFin: string, intervaloMin: number) {
+  const aMin = (h: string) => {
+    const [hh, mm] = h.split(':').map(Number);
+    return hh * 60 + mm;
+  };
+  const aHora = (m: number) =>
+    `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const slots: string[] = [];
+  for (let m = aMin(horaInicio); m < aMin(horaFin); m += intervaloMin) {
+    slots.push(aHora(m));
+  }
+  return slots;
 }

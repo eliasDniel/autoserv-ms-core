@@ -18,14 +18,18 @@ enum EstadoOrden {
 }
 
 model Cliente {
-  id        Int       @id @default(autoincrement()) @map("id_cliente")
-  cedula    String?   @unique @db.VarChar(20)
-  nombre    String    @db.VarChar(150)
-  telefono  String?   @db.VarChar(30)
-  email     String?   @db.VarChar(255)
-  direccion String?   @db.VarChar(255)
-  ciudad    String?   @db.VarChar(100)
-  vehiculos Vehiculo[]
+  id                   Int       @id @default(autoincrement()) @map("id_cliente")
+  cedula               String?   @unique @db.VarChar(20)
+  nombre               String    @db.VarChar(150)
+  telefono             String?   @db.VarChar(30)
+  email                String?   @db.VarChar(255)
+  direccion            String?   @db.VarChar(255)
+  ciudad               String?   @db.VarChar(100)
+  telegramChatId       String?   @unique @map("telegram_chat_id") @db.VarChar(50)
+  telegramVinculoToken String?   @unique @map("telegram_vinculo_token") @db.VarChar(64)
+  telegramVinculoExpira DateTime? @map("telegram_vinculo_expira") @db.Timestamptz(6)
+  vehiculos            Vehiculo[]
+  citas                Cita[]
 
   @@map("clientes")
   @@schema("app")
@@ -46,6 +50,7 @@ model Vehiculo {
   transmision  String?         @db.VarChar(30)
   kilometraje  Int             @default(0)
   ordenes      OrdenServicio[]
+  citas        Cita[]
 
   @@index([clienteId])
   @@map("vehiculos")
@@ -120,6 +125,7 @@ model Servicio {
   tiempoEstimadoMin Int                     @map("tiempo_estimado_min")
   precio            Decimal                 @db.Decimal(10, 2)
   lineas            OrdenServicioServicio[]
+  citas             Cita[]
 
   @@map("servicios")
   @@schema("app")
@@ -169,19 +175,43 @@ model MovimientoInventario {
 }
 
 model Cita {
-  id            Int    @id @default(autoincrement()) @map("id_cita")
-  nombreCliente String @map("nombre_cliente") @db.VarChar(150)
-  telefono      String @default("") @db.VarChar(30)
-  placa         String @default("") @db.VarChar(20)
-  servicio      String @db.VarChar(150)
-  fecha         String @db.VarChar(10)
-  hora          String @db.VarChar(5)
-  mecanico      String @db.VarChar(10)
-  notas         String @default("") @db.Text
-  estado        String @default("pendiente") @db.VarChar(20)
+  id                       Int       @id @default(autoincrement()) @map("id_cita")
+  nombreCliente            String    @map("nombre_cliente") @db.VarChar(150)
+  telefono                 String    @default("") @db.VarChar(30)
+  placa                    String    @default("") @db.VarChar(20)
+  servicio                 String    @db.VarChar(150)
+  fecha                    String    @db.VarChar(10)
+  hora                     String    @db.VarChar(5)
+  mecanico                 String    @db.VarChar(10)
+  notas                    String    @default("") @db.Text
+  estado                   String    @default("pendiente") @db.VarChar(20)
+  origen                   String    @default("web") @db.VarChar(20)
+  telegramChatId           String?   @map("telegram_chat_id") @db.VarChar(50)
+  clienteId                Int?      @map("id_cliente")
+  cliente                  Cliente?  @relation(fields: [clienteId], references: [id])
+  vehiculoId               Int?      @map("id_vehiculo")
+  vehiculo                 Vehiculo? @relation(fields: [vehiculoId], references: [id])
+  servicioId               Int?      @map("id_servicio")
+  servicioRef              Servicio? @relation(fields: [servicioId], references: [id])
+  recordatorio24hEnviado   Boolean   @default(false) @map("recordatorio_24h_enviado")
+  recordatorio2hEnviado    Boolean   @default(false) @map("recordatorio_2h_enviado")
 
   @@index([fecha])
+  @@index([telegramChatId])
+  @@index([fecha, hora, mecanico])
   @@map("citas")
+  @@schema("app")
+}
+
+model HorarioTaller {
+  id           Int    @id @default(autoincrement()) @map("id_horario_taller")
+  diaSemana    Int    @map("dia_semana")
+  horaInicio   String @map("hora_inicio") @db.VarChar(5)
+  horaFin      String @map("hora_fin") @db.VarChar(5)
+  intervaloMin Int    @default(60) @map("intervalo_min")
+
+  @@unique([diaSemana])
+  @@map("horarios_taller")
   @@schema("app")
 }
 
