@@ -54,8 +54,14 @@ export class RecepcionController {
     min?: number;
     max?: number;
     precio?: number;
+    sincronizarStock?: boolean;
   }) {
     return this.recepcionService.crearRepuesto(dto);
+  }
+
+  @MessagePattern('core.inventario.eliminar')
+  eliminarRepuesto(@Payload() dto: { codigo: string }) {
+    return this.recepcionService.eliminarRepuesto(dto.codigo);
   }
 
   @MessagePattern('core.inventario.importar')
@@ -123,6 +129,47 @@ export class RecepcionController {
   @MessagePattern('core.cliente.porChat')
   clientePorChat(@Payload() dto: { chatId: string }) {
     return this.recepcionService.clientePorChat(dto);
+  }
+
+  @MessagePattern('core.cliente.guardar')
+  guardarCliente(@Payload() dto: {
+    id?: number | string;
+    name: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    city?: string;
+    cedula?: string;
+  }) {
+    return this.recepcionService.guardarCliente(dto);
+  }
+
+  @MessagePattern('core.cliente.eliminar')
+  eliminarCliente(@Payload() dto: { id: number | string }) {
+    return this.recepcionService.eliminarCliente(dto.id);
+  }
+
+  @MessagePattern('core.vehiculo.guardar')
+  guardarVehiculo(@Payload() dto: {
+    id?: number | string;
+    clientId: number | string;
+    plate: string;
+    brand: string;
+    model: string;
+    year?: string | number;
+    color?: string;
+    vin?: string;
+    engine?: string;
+    fuel?: string;
+    transmission?: string;
+    km?: number;
+  }) {
+    return this.recepcionService.guardarVehiculo(dto);
+  }
+
+  @MessagePattern('core.vehiculo.eliminar')
+  eliminarVehiculo(@Payload() dto: { id: number | string }) {
+    return this.recepcionService.eliminarVehiculo(dto.id);
   }
 
   @MessagePattern('core.cita.porChat')

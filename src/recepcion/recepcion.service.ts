@@ -73,20 +73,150 @@ export class RecepcionService {
   }
 
   async listar() {
-    const ordenes = await this.prisma.ordenServicio.findMany({
-      include: ordenInclude,
-      orderBy: { fechaIngreso: 'desc' },
-    });
+    const [ordenes, clientesDb] = await Promise.all([
+      this.prisma.ordenServicio.findMany({
+        include: ordenInclude,
+        orderBy: { fechaIngreso: 'desc' },
+      }),
+      this.prisma.cliente.findMany({
+        include: { vehiculos: true },
+        orderBy: { nombre: 'asc' },
+      }),
+    ]);
     const bundles = ordenes.map((orden) => this.presentar(orden));
-    const clientes = new Map(bundles.map((item) => [item.cliente.id, item.cliente]));
-    const vehiculos = new Map(
-      bundles.map((item) => [item.vehiculo.id, item.vehiculo]),
-    );
     return {
-      clientes: [...clientes.values()],
-      vehiculos: [...vehiculos.values()],
+      clientes: clientesDb.map((c) => this.presentarCliente(c)),
+      vehiculos: clientesDb.flatMap((c) =>
+        c.vehiculos.map((v) => this.presentarVehiculo(v, c.id)),
+      ),
       ordenes: bundles.map((item) => item.orden),
     };
+  }
+
+  async guardarCliente(dto: {
+    id?: number | string;
+    name: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    city?: string;
+    cedula?: string;
+  }) {
+    const nombre = dto.name?.trim();
+    if (!nombre) {
+      throw new RpcException({ statusCode: 400, message: 'El nombre del cliente es obligatorio' });
+    }
+    const data = {
+      nombre,
+      telefono: vacio(dto.phone),
+      email: vacio(dto.email),
+      direccion: vacio(dto.address),
+      ciudad: vacio(dto.city),
+      cedula: vacio(dto.cedula),
+    };
+    const id = dto.id ? Number(dto.id) : NaN;
+    const fila = Number.isFinite(id)
+      ? await this.prisma.cliente.update({ where: { id }, data })
+      : await this.prisma.cliente.create({ data });
+    return this.presentarCliente(fila);
+  }
+
+  async eliminarCliente(idRaw: number | string) {
+    const id = Number(idRaw);
+    if (!Number.isFinite(id)) {
+      throw new RpcException({ statusCode: 400, message: 'Cliente inválido' });
+    }
+    const cliente = await this.prisma.cliente.findUnique({
+      where: { id },
+      include: { vehiculos: { include: { ordenes: { select: { id: true }, take: 1 } } }, citas: { take: 1 } },
+    });
+    if (!cliente) {
+      throw new RpcException({ statusCode: 404, message: 'Cliente no encontrado' });
+    }
+    const conOrdenes = cliente.vehiculos.some((v) => v.ordenes.length > 0);
+    if (conOrdenes || cliente.citas.length > 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede eliminar: el cliente tiene órdenes o citas',
+      });
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.vehiculo.deleteMany({ where: { clienteId: id } });
+      await tx.cliente.delete({ where: { id } });
+    });
+    return { ok: true };
+  }
+
+  async guardarVehiculo(dto: {
+    id?: number | string;
+    clientId: number | string;
+    plate: string;
+    brand: string;
+    model: string;
+    year?: string | number;
+    color?: string;
+    vin?: string;
+    engine?: string;
+    fuel?: string;
+    transmission?: string;
+    km?: number;
+  }) {
+    const clienteId = Number(dto.clientId);
+    const placa = dto.plate?.trim().toUpperCase();
+    if (!Number.isFinite(clienteId) || !placa || !dto.brand?.trim() || !dto.model?.trim()) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'Completa cliente, placa, marca y modelo',
+      });
+    }
+    const cliente = await this.prisma.cliente.findUnique({ where: { id: clienteId } });
+    if (!cliente) {
+      throw new RpcException({ statusCode: 404, message: 'Cliente no encontrado' });
+    }
+    const data = {
+      clienteId,
+      placa,
+      marca: dto.brand.trim(),
+      modelo: dto.model.trim(),
+      anio: Number(dto.year) || new Date().getFullYear(),
+      color: vacio(dto.color),
+      vin: vacio(dto.vin),
+      motor: vacio(dto.engine),
+      combustible: vacio(dto.fuel),
+      transmision: vacio(dto.transmission),
+      kilometraje: Math.max(0, Number(dto.km) || 0),
+    };
+    const id = dto.id ? Number(dto.id) : NaN;
+    const fila = Number.isFinite(id)
+      ? await this.prisma.vehiculo.update({ where: { id }, data })
+      : await this.prisma.vehiculo.upsert({
+          where: { placa },
+          update: data,
+          create: data,
+        });
+    return this.presentarVehiculo(fila, clienteId);
+  }
+
+  async eliminarVehiculo(idRaw: number | string) {
+    const id = Number(idRaw);
+    if (!Number.isFinite(id)) {
+      throw new RpcException({ statusCode: 400, message: 'Vehículo inválido' });
+    }
+    const vehiculo = await this.prisma.vehiculo.findUnique({
+      where: { id },
+      include: { ordenes: { take: 1 }, citas: { take: 1 } },
+    });
+    if (!vehiculo) {
+      throw new RpcException({ statusCode: 404, message: 'Vehículo no encontrado' });
+    }
+    if (vehiculo.ordenes.length > 0 || vehiculo.citas.length > 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede eliminar: el vehículo tiene órdenes o citas',
+      });
+    }
+    await this.prisma.vehiculo.delete({ where: { id } });
+    return { ok: true };
   }
 
   async guardar(dto: GuardarRecepcionDto) {
@@ -281,6 +411,8 @@ export class RecepcionService {
     min?: number;
     max?: number;
     precio?: number;
+    /** Solo import CSV: alinea stockActual al valor del archivo */
+    sincronizarStock?: boolean;
   }) {
     const nombre = dto.nombre?.trim();
     if (!nombre) {
@@ -295,17 +427,38 @@ export class RecepcionService {
     const categoria = dto.categoria?.trim() || 'General';
     const existente = await this.prisma.repuesto.findUnique({ where: { codigo } });
     if (existente) {
+      const data: {
+        nombre: string;
+        categoria: string;
+        precioUnitario: number;
+        stockMinimo: number;
+        stockMaximo: number;
+        stockActual?: number;
+      } = {
+        nombre,
+        categoria,
+        precioUnitario: precio,
+        stockMinimo: min,
+        stockMaximo: max,
+      };
+      if (dto.sincronizarStock) {
+        data.stockActual = stock;
+      }
       await this.prisma.repuesto.update({
         where: { id: existente.id },
-        data: {
-          nombre,
-          categoria,
-          precioUnitario: precio,
-          stockMinimo: min,
-          stockMaximo: max,
-          stockActual: stock,
-        },
+        data,
       });
+      if (dto.sincronizarStock && stock !== existente.stockActual) {
+        const delta = stock - existente.stockActual;
+        await this.prisma.movimientoInventario.create({
+          data: {
+            repuestoId: existente.id,
+            tipo: delta >= 0 ? 'entrada' : 'salida',
+            cantidad: Math.abs(delta),
+            nota: 'Ajuste por importación CSV',
+          },
+        });
+      }
       return this.listarInventario();
     }
     await this.prisma.repuesto.create({
@@ -328,6 +481,24 @@ export class RecepcionService {
     return this.listarInventario();
   }
 
+  async eliminarRepuesto(codigo: string) {
+    const fila = await this.prisma.repuesto.findUnique({ where: { codigo } });
+    if (!fila) {
+      throw new RpcException({ statusCode: 404, message: 'Repuesto no encontrado' });
+    }
+    const enOrdenes = await this.prisma.detalleRepuestoOrden.count({
+      where: { repuestoId: fila.id },
+    });
+    if (enOrdenes > 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede eliminar: el repuesto está usado en órdenes',
+      });
+    }
+    await this.prisma.repuesto.delete({ where: { id: fila.id } });
+    return this.listarInventario();
+  }
+
   async importarRepuestos(filas: {
     codigo: string;
     nombre: string;
@@ -338,7 +509,7 @@ export class RecepcionService {
     precio?: number;
   }[]) {
     for (const fila of filas) {
-      await this.crearRepuesto(fila);
+      await this.crearRepuesto({ ...fila, sincronizarStock: true });
     }
     return this.listarInventario();
   }
@@ -1053,33 +1224,63 @@ export class RecepcionService {
     });
   }
 
+  private presentarCliente(cliente: {
+    id: number;
+    nombre: string;
+    telefono: string | null;
+    email: string | null;
+    direccion: string | null;
+    ciudad: string | null;
+  }) {
+    return {
+      id: String(cliente.id),
+      name: cliente.nombre,
+      phone: cliente.telefono ?? '',
+      email: cliente.email ?? '',
+      address: cliente.direccion ?? '',
+      city: cliente.ciudad ?? '',
+    };
+  }
+
+  private presentarVehiculo(
+    vehiculo: {
+      id: number;
+      placa: string;
+      marca: string;
+      modelo: string;
+      anio: number;
+      color: string | null;
+      vin: string | null;
+      motor: string | null;
+      combustible: string | null;
+      transmision: string | null;
+      kilometraje: number;
+    },
+    clienteId: number,
+  ) {
+    return {
+      id: String(vehiculo.id),
+      clientId: String(clienteId),
+      plate: vehiculo.placa,
+      brand: vehiculo.marca,
+      model: vehiculo.modelo,
+      year: String(vehiculo.anio),
+      color: vehiculo.color ?? '',
+      vin: vehiculo.vin ?? '',
+      engine: vehiculo.motor ?? '',
+      fuel: vehiculo.combustible ?? '',
+      transmission: vehiculo.transmision ?? '',
+      km: vehiculo.kilometraje,
+    };
+  }
+
   private presentar(orden: OrdenCompleta) {
     const danos = new Set(orden.inspecciones.map((item) => item.zona));
     const partes = Object.fromEntries(ZONAS.map((zona) => [zona, !danos.has(zona)]));
     const cliente = orden.vehiculo.cliente;
     return {
-      cliente: {
-        id: String(cliente.id),
-        name: cliente.nombre,
-        phone: cliente.telefono ?? '',
-        email: cliente.email ?? '',
-        address: cliente.direccion ?? '',
-        city: cliente.ciudad ?? '',
-      },
-      vehiculo: {
-        id: String(orden.vehiculo.id),
-        clientId: String(cliente.id),
-        plate: orden.vehiculo.placa,
-        brand: orden.vehiculo.marca,
-        model: orden.vehiculo.modelo,
-        year: String(orden.vehiculo.anio),
-        color: orden.vehiculo.color ?? '',
-        vin: orden.vehiculo.vin ?? '',
-        engine: orden.vehiculo.motor ?? '',
-        fuel: orden.vehiculo.combustible ?? '',
-        transmission: orden.vehiculo.transmision ?? '',
-        km: orden.vehiculo.kilometraje,
-      },
+      cliente: this.presentarCliente(cliente),
+      vehiculo: this.presentarVehiculo(orden.vehiculo, cliente.id),
       orden: {
         os: orden.numeroOs,
         clientId: String(cliente.id),
