@@ -301,9 +301,9 @@ export class RecepcionService {
     }
     const bundle = this.presentar(orden);
     const servicios = bundle.orden.services ?? [];
-    const repuestosUsados = (bundle.orden.usedParts ?? []).filter((p) => p.used);
+    const repuestosEnOrden = bundle.orden.usedParts ?? [];
     const subtotalServicios = servicios.reduce((s, v) => s + v.price, 0);
-    const subtotalRepuestos = repuestosUsados.reduce(
+    const subtotalRepuestos = repuestosEnOrden.reduce(
       (s, p) => s + p.price * p.qty,
       0,
     );
