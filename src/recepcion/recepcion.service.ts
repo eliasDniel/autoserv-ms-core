@@ -291,6 +291,63 @@ export class RecepcionService {
     return { ok: true };
   }
 
+  async reporteSalida(numeroOs: string) {
+    const orden = await this.prisma.ordenServicio.findUnique({
+      where: { numeroOs },
+      include: ordenInclude,
+    });
+    if (!orden) {
+      throw new RpcException({ statusCode: 404, message: 'La orden no existe' });
+    }
+    const bundle = this.presentar(orden);
+    const servicios = bundle.orden.services ?? [];
+    const repuestosUsados = (bundle.orden.usedParts ?? []).filter((p) => p.used);
+    const subtotalServicios = servicios.reduce((s, v) => s + v.price, 0);
+    const subtotalRepuestos = repuestosUsados.reduce(
+      (s, p) => s + p.price * p.qty,
+      0,
+    );
+    const total = subtotalServicios + subtotalRepuestos;
+    const zonasDanadas = Object.entries(bundle.orden.parts ?? {})
+      .filter(([, ok]) => !ok)
+      .map(([zona]) => zona);
+    const pago = (bundle.orden.payment ?? null) as { method?: string } | null;
+    const emitidoEn = new Date().toLocaleString('es-EC', {
+      dateStyle: 'long',
+      timeStyle: 'short',
+      timeZone: 'America/Guayaquil',
+    });
+    const finalizacion = orden.fechaFinalizacion
+      ? orden.fechaFinalizacion.toLocaleString('es-EC', {
+          dateStyle: 'short',
+          timeStyle: 'short',
+          timeZone: 'America/Guayaquil',
+        })
+      : null;
+
+    return {
+      tipo: 'reporte_salida_vehiculo',
+      titulo: 'Reporte final de salida del vehículo',
+      taller: {
+        nombre: 'AutoServ AI',
+        ciudad: 'Milagro, Ecuador',
+      },
+      emitidoEn,
+      fechaFinalizacion: finalizacion,
+      cliente: bundle.cliente,
+      vehiculo: bundle.vehiculo,
+      orden: bundle.orden,
+      resumen: {
+        zonasDanadas,
+        subtotalServicios,
+        subtotalRepuestos,
+        total,
+        metodoPago: pago?.method ?? null,
+        cobrado: Boolean(pago),
+      },
+    };
+  }
+
   async listarInventario() {
     await this.prisma.$transaction((tx) => this.asegurarCatalogo(tx));
     const diasVentana = 90;

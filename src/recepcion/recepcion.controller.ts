@@ -35,6 +35,11 @@ export class RecepcionController {
     return this.recepcionService.eliminar(dto.numeroOs);
   }
 
+  @MessagePattern('core.orden.reporteSalida')
+  reporteSalida(@Payload() dto: { numeroOs: string }) {
+    return this.recepcionService.reporteSalida(dto.numeroOs);
+  }
+
   @MessagePattern('core.inventario.listar')
   listarInventario() {
     return this.recepcionService.listarInventario();
